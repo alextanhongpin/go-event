@@ -1,3 +1,4 @@
+// This example demonstrates on how to create your own event handler.
 package main
 
 import (
