@@ -10,7 +10,9 @@ import (
 
 	"log/slog"
 
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/metric/metrictest"
+	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/exp/event"
 	"golang.org/x/exp/event/adapter/logfmt"
 	"golang.org/x/exp/event/eventtest"
@@ -31,7 +33,7 @@ func main() {
 	}))
 	ctx := context.Background()
 	//_ = log
-	ctx = event.WithExporter(ctx, event.NewExporter(&multiHandler{
+	ctx = event.WithExporter(ctx, event.NewExporter(&MultiHandler{
 		metric: mh,
 		log:    log,
 		slog:   NewSlogHandler(logger),
@@ -47,14 +49,14 @@ func main() {
 	fmt.Printf("%#v", got)
 }
 
-type multiHandler struct {
+type MultiHandler struct {
 	metric *otel.MetricHandler
 	trace  *otel.TraceHandler
 	slog   *SlogHandler
 	log    *logfmt.Handler
 }
 
-func (h *multiHandler) Event(ctx context.Context, ev *event.Event) context.Context {
+func (h *MultiHandler) Event(ctx context.Context, ev *event.Event) context.Context {
 	if h.slog != nil {
 		ctx = h.slog.Event(ctx, ev)
 	}
@@ -125,6 +127,25 @@ func (h *SlogHandler) Event(ctx context.Context, ev *event.Event) context.Contex
 	}
 
 	msg := ev.Find("msg").String()
+
+	// https://github.com/uptrace/opentelemetry-go-extra/blob/main/otellogrus/otellogrus.go#L91
+	span := trace.SpanFromContext(ctx)
+	if span.IsRecording() {
+		// Adds TraceIds and SpanIds to logs.
+		spanCtx := span.SpanContext()
+		if spanCtx.HasTraceID() {
+			attrs = append(attrs, slog.String("traceId", spanCtx.TraceID().String()))
+		}
+
+		if spanCtx.HasSpanID() {
+			attrs = append(attrs, slog.String("spanId", spanCtx.SpanID().String()))
+		}
+
+		if isError {
+			span.SetStatus(codes.Error, msg)
+		}
+	}
+
 	h.logAttrs(ctx, ev.At, level, msg, attrs...)
 
 	return ctx
